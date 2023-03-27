@@ -1,4 +1,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+# 使用人体检测器+骨骼提取器+识别器，对输入视频的整个进行预测
+# 不是原子级
 import argparse
 import os
 import os.path as osp
@@ -228,6 +230,7 @@ def main():
     fake_anno['keypoint'] = keypoint
     fake_anno['keypoint_score'] = keypoint_score
 
+    # 得到人体骨架预测
     results = inference_recognizer(model, fake_anno)
 
     action_label = label_map[results[0][0]]

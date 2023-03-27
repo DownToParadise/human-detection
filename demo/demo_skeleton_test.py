@@ -1,6 +1,4 @@
-
-# 怎么样得到每个人的动作预测值
-# 这里好像表现的时所有人一起的预测值，预测所有人的动作，而我们的跌倒检测是一个原子级的检测
+# 增加原子级动作检测
 # Copyright (c) OpenMMLab. All rights reserved.
 import argparse
 import os
@@ -15,6 +13,11 @@ from mmcv import DictAction
 
 from mmaction.apis import inference_recognizer, init_recognizer
 from demo_video_structuralize import skeleton_based_action_recognition, skeleton_based_stdet
+
+from mmaction.datasets.pipelines import Compose
+from mmcv.runner import load_checkpoint
+from mmaction.models import build_model
+
 try:
     from mmdet.apis import inference_detector, init_detector
 except (ImportError, ModuleNotFoundError):
@@ -186,14 +189,146 @@ def pose_inference(args, frame_paths, det_results):
         prog_bar.update()
     return ret
 
-def skeleton_based_action_reconition(args, pose_results, fake_anno, label_map):
+def cal_iou(box1, box2):
+    """计算两个框的交并比"""
+    xmin1, ymin1, xmax1, ymax1 = box1
+    xmin2, ymin2, xmax2, ymax2 = box2
+
+    s1 = (xmax1 - xmin1) * (ymax1 - ymin1)
+    s2 = (xmax2 - xmin2) * (ymax2 - ymin2)
+
+    xmin = max(xmin1, xmin2)
+    ymin = max(ymin1, ymin2)
+    xmax = min(xmax1, xmax2)
+    ymax = min(ymax1, ymax2)
+
+    w = max(0, xmax - xmin)
+    h = max(0, ymax - ymin)
+    intersect = w * h
+    union = s1 + s2 - intersect
+    iou = intersect / union
+
+    return iou
+
+def expand_bbox(person_bbox, h, w):
+    """为了后期使框更加平滑，先占个坑位"""
+    return person_bbox
+
+def skeleton_based_spatiotemporal_reconition(args, label_map, human_detections, pose_results,
+                         num_frame, h, w, clip_len=1, frame_interval=1):
+    #h与w我们不需要
     """
     args: 参数
-    pose_results
-    fake_anno: 已经存放好的参数
+    label_map: list，标签映射
+    human_detections: 人体检测数据
+    pose_result: 人体骨骼数据
+    num_frame: 处理帧的数量
+    clib_len: 默认为1
+    frame_interval: 默认为1
 
-    output: 每一帧中识别道德骨架的预测
+    Returns:
+    每一帧中识别道德骨架的预测
     """
+    # 时序骨骼长度为8
+    windowsize = 8
+    timestamps = np.arange(0, num_frame)
+
+    # 加载模型
+    skeleton_config = mmcv.Config.fromfile(args.config)
+    num_class = len(label_map)
+    skeleton_pipeline = Compose(skeleton_config.test_pipeline)
+
+    # 加载模型
+    skeleton_stdet_model = build_model(skeleton_config.model)
+    load_checkpoint(
+        skeleton_stdet_model,
+        args.checkpoint,
+        map_location='cpu')
+    skeleton_stdet_model.to(args.device)
+    skeleton_stdet_model.eval()
+
+    skeleton_predictions = []
+
+    print('Performing SpatioTemporal Action Detection for each clip')
+    # 按照选定的帧数进行预测
+    prog_bar = mmcv.ProgressBar(len(timestamps))
+    for timestamp in timestamps:
+        # proposal与pose_result的帧数要对齐
+        # 取出该帧的人体检测
+        proposal = human_detections[timestamp]
+        if proposal.shape[0] == 0:  # no people detected
+            skeleton_predictions.append(None)
+            continue
+        
+        # 取出该帧的人体骨骼
+        print(timestamp)
+        pose_result = pose_results[timestamp]
+
+        # 建立人体骨骼的时序长度
+        # start_frame = timestamp - (clip_len // 2 - 1) * frame_interval
+        start_frame = timestamp - windowsize//2
+        frame_inds = start_frame + np.arange(0, windowsize, frame_interval)
+        frame_inds =[i for i in list(frame_inds) if i>0 and i< num_frame]
+        pose_num_frame = len(frame_inds)
+
+        # 对该帧中所有的人体骨骼进行检测
+        skeleton_prediction = []
+        for i in range(proposal.shape[0]):
+            # 这一步是为了后期对齐数据
+            skeleton_prediction.append([])
+
+            # 为每个骨骼建立数据
+            fake_anno = dict(
+                frame_dict='',
+                label=-1,
+                img_shape=(h, w),
+                origin_shape=(h, w),
+                start_index=0,
+                modality='Pose',
+                total_frames=pose_num_frame)
+            num_person = 1
+
+            num_keypoint = 17
+            keypoint = np.zeros(
+                (num_person, pose_num_frame, num_keypoint, 2))  # M T V 2
+            keypoint_score = np.zeros(
+                (num_person, pose_num_frame, num_keypoint))  # M T V
+            
+            # 得到人体检测的具体位置
+            person_bbox = proposal[i][:4]
+            area = expand_bbox(person_bbox, h, w)
+            # j为某一帧，poses为该帧中的所有人体骨骼
+            # 这里因为pose_result中只有一帧的骨骼信息，所以只用套一层循环
+            for j, poses in enumerate(pose_result):  
+                # 将人体骨骼和检测框进行匹配
+                max_iou = float('-inf')
+                index = -1
+                if len(poses) == 0:
+                    continue
+                for k, per_pose in enumerate(poses):
+                    # 为什么这个地方perpose不是字典而是字符串
+                    iou = cal_iou(per_pose['bbox'][:4], area)
+                    if max_iou < iou:
+                        index = k
+                        max_iou = iou
+                # 尽管这里又很多帧，但是由于area只有一个检测框，所以只能匹配一个骨骼
+                keypoint[0, j] = poses[index]['keypoints'][:, :2]
+                keypoint_score[0, j] = poses[index]['keypoints'][:, 2]
+
+            fake_anno['keypoint'] = keypoint
+            fake_anno['keypoint_score'] = keypoint_score
+
+            # pipeline处理
+            # return返回字典，前五个精度最高的标签和分数
+            results = inference_recognizer(skeleton_stdet_model, fake_anno)
+            skeleton_prediction.append(results[0])
+            st_action_label = label_map[results[0][0]]
+            print(st_action_label)
+
+    skeleton_predictions.append(skeleton_prediction)
+    prog_bar.update()
+    return timestamps, skeleton_predictions
+
 
 
 def main():
@@ -216,7 +351,7 @@ def main():
     # Load label_map
     label_map = [x.strip() for x in open(args.label_map).readlines()]
 
-    # Get Human detection results
+    # 得到人体检测信息
     det_results = detection_inference(args, frame_paths)
     torch.cuda.empty_cache()
 
@@ -236,8 +371,6 @@ def main():
     
     # 得到该视频中出现的最多的人数
     num_person = max([len(x) for x in pose_results])
-    # num_person = 1
-    # total_frames = 25
 
     # 根据人数初始化数据结构
     num_keypoint = 17
@@ -269,6 +402,10 @@ def main():
     print(results)
     action_label = label_map[results[0][0]]
 
+    # 原子级动作检测
+    # 这几个数据的个数都是一致的先尝试逐帧检测
+    # print("\nlabel_map", np.array(label_map).shape, "det_results", np.array(det_results).shape, "pose_results", np.array(pose_results).shape, "num_frame", num_frame, sep="\t")
+    skeleton_based_spatiotemporal_reconition(args, label_map, det_results, pose_results, num_frame, h, w)
     # 生成这个是为了更加方便画骨骼图
     pose_model = init_pose_model(args.pose_config, args.pose_checkpoint,
                                  args.device)

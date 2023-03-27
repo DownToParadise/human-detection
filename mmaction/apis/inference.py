@@ -109,6 +109,7 @@ def inference_recognizer(model, video, outputs=None, as_tensor=True, **kwargs):
     test_pipeline = cfg.data.test.pipeline
     # Alter data pipelines & prepare inputs
     if input_flag == 'dict':
+        # 我们的faano是这个形式
         data = video
     if input_flag == 'array':
         modality_map = {2: 'Flow', 3: 'RGB'}
