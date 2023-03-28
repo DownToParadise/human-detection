@@ -53,6 +53,14 @@ def init_recognizer(config, checkpoint=None, device='cuda:0', **kwargs):
     return model
 
 
+def softmax(a):
+    """将分数转化成精度"""
+    c=np.max(a) #求数组中的最大值
+    exp=np.exp(a-c)  #指数运算
+    sum_exp=np.sum(exp) #指数求和
+    y=exp/sum_exp        #softmax函数值
+    return y
+
 def inference_recognizer(model, video, outputs=None, as_tensor=True, **kwargs):
     """Inference a video with the recognizer.
 
@@ -109,7 +117,6 @@ def inference_recognizer(model, video, outputs=None, as_tensor=True, **kwargs):
     test_pipeline = cfg.data.test.pipeline
     # Alter data pipelines & prepare inputs
     if input_flag == 'dict':
-        # 我们的faano是这个形式
         data = video
     if input_flag == 'array':
         modality_map = {2: 'Flow', 3: 'RGB'}
@@ -184,6 +191,7 @@ def inference_recognizer(model, video, outputs=None, as_tensor=True, **kwargs):
         returned_features = h.layer_outputs if outputs else None
 
     num_classes = scores.shape[-1]
+    scores = softmax(np.array(scores)).tolist()
     score_tuples = tuple(zip(range(num_classes), scores))
     score_sorted = sorted(score_tuples, key=itemgetter(1), reverse=True)
 

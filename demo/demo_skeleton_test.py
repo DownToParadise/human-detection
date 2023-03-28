@@ -9,6 +9,7 @@ import cv2
 import mmcv
 import numpy as np
 import torch
+import copy as cp
 from mmcv import DictAction
 
 from mmaction.apis import inference_recognizer, init_recognizer
@@ -44,6 +45,17 @@ FONTCOLOR = (255, 255, 255)  # BGR, white
 THICKNESS = 1
 LINETYPE = 1
 
+def hex2color(h):
+    """Convert the 6-digit hex string to tuple of 3 int value (RGB)"""
+    return (int(h[:2], 16), int(h[2:4], 16), int(h[4:], 16))
+
+
+PLATEBLUE = '03045e-023e8a-0077b6-0096c7-00b4d8-48cae4'
+PLATEBLUE = PLATEBLUE.split('-')
+PLATEBLUE = [hex2color(h) for h in PLATEBLUE]
+PLATEGREEN = '004b23-006400-007200-008000-38b000-70e000'
+PLATEGREEN = PLATEGREEN.split('-')
+PLATEGREEN = [hex2color(h) for h in PLATEGREEN]
 
 def parse_args():
     # 参数配置
@@ -108,6 +120,101 @@ def parse_args():
     args = parser.parse_args()
     return args
 
+def abbrev(name):
+    """Get the abbreviation of label name:
+
+    'take (an object) from (a person)' -> 'take ... from ...'
+    """
+    while name.find('(') != -1:
+        st, ed = name.find('('), name.find(')')
+        name = name[:st] + '...' + name[ed + 1:]
+    return name
+
+def visualize(frames,
+              annotations,
+              pose_results,
+              action_result,
+              pose_model,
+              plate=PLATEBLUE,
+              max_num=5):
+    """Visualize frames with predicted annotations.
+
+    Args:
+        frames (list[np.ndarray]): Frames for visualization, note that
+            len(frames) % len(annotations) should be 0.
+        annotations (list[list[tuple]]): The predicted spatio-temporal
+            detection results.原子级预测tuple中为(bbox, )
+        pose_results (list[list[tuple]): The pose results.
+        action_result (str): The predicted action recognition results.时间级预测
+        pose_model (nn.Module): The constructed pose model.
+        plate (str): The plate used for visualization. Default: PLATEBLUE.
+        max_num (int): Max number of labels to visualize for a person box.
+            Default: 5.
+
+    Returns:
+        list[np.ndarray]: Visualized frames.
+    """
+    # 色盘的大小必须大于max_num，否者弹出异常
+    assert max_num + 1 <= len(plate)
+    plate = [x[::-1] for x in plate]
+
+    frames_ = cp.deepcopy(frames)
+    nf, na = len(frames), len(annotations)
+    # 帧的数量必须是原子级动作识别数量的整数倍，这里为8倍
+    assert nf % na == 0
+    nfpa = len(frames) // len(annotations)
+    anno = None
+    h, w, _ = frames[0].shape
+    scale_ratio = np.array([w, h, w, h])
+
+    # 绘制人体骨骼
+    if pose_results:
+        for i in range(nf):
+            frames_[i] = vis_pose_result(pose_model, frames_[i],
+                                         pose_results[i])
+
+    for i in range(na):
+        anno = annotations[i]
+        if anno is None:
+            continue
+        for j in range(nfpa):
+            ind = i * nfpa + j
+            frame = frames_[ind]
+
+            # add action result for whole video
+            # 添加动作事件级识别可视化
+            cv2.putText(frame, action_result, (10, 30), FONTFACE, FONTSCALE,
+                        FONTCOLOR, THICKNESS, LINETYPE)
+
+            # add spatio-temporal action detection results
+            # 添加原子级动作识别可视化
+            for ann in anno:
+                box = ann[0]
+                label = ann[1]
+                if not len(label):
+                    continue
+                score = ann[2]
+
+                # 绘制检测框
+                box = box.astype(np.int64)
+                st, ed = tuple(box[:2]), tuple(box[2:])
+                if not pose_results:
+                    cv2.rectangle(frame, st, ed, plate[0], 2)
+
+                text = ': '.join([label, "%.2f%%"%(score*100)])
+                print(text)
+                location = (0 + st[0], 18 + 1 * 18 + st[1])
+                textsize = cv2.getTextSize(text, FONTFACE, FONTSCALE,
+                                            THICKNESS)[0]
+                textwidth = textsize[0]
+                plate_width = 16
+                diag0 = (location[0] + textwidth, location[1] - plate_width)
+                diag1 = (location[0], location[1] + 2)
+                cv2.rectangle(frame, diag0, diag1, plate[1], -1)
+                cv2.putText(frame, text, location, FONTFACE, FONTSCALE,
+                            FONTCOLOR, THICKNESS, LINETYPE)
+
+    return frames_
 
 def frame_extraction(video_path, short_side):
     """Extract frames given video_path.
@@ -214,9 +321,9 @@ def expand_bbox(person_bbox, h, w):
     """为了后期使框更加平滑，先占个坑位"""
     return person_bbox
 
-def skeleton_based_spatiotemporal_reconition(args, label_map, human_detections, pose_results,
+def skeleton_based_spatiotemporal_reconition(args, model, label_map, human_detections, pose_results,
                          num_frame, h, w, clip_len=1, frame_interval=1):
-    #h与w我们不需要
+    # h与w我们不需要
     """
     args: 参数
     label_map: list，标签映射
@@ -227,28 +334,18 @@ def skeleton_based_spatiotemporal_reconition(args, label_map, human_detections, 
     frame_interval: 默认为1
 
     Returns:
-    每一帧中识别道德骨架的预测
+    timestamps: 预测的视频帧index
+    stdet_preds: list[list[list[tuple]]
     """
     # 时序骨骼长度为8
     windowsize = 8
     timestamps = np.arange(0, num_frame)
 
     # 加载模型
-    skeleton_config = mmcv.Config.fromfile(args.config)
-    num_class = len(label_map)
-    skeleton_pipeline = Compose(skeleton_config.test_pipeline)
+    skeleton_stdet_model = model
 
-    # 加载模型
-    skeleton_stdet_model = build_model(skeleton_config.model)
-    load_checkpoint(
-        skeleton_stdet_model,
-        args.checkpoint,
-        map_location='cpu')
-    skeleton_stdet_model.to(args.device)
-    skeleton_stdet_model.eval()
-
+    # 将检测框和预测标签匹配起来
     skeleton_predictions = []
-
     print('Performing SpatioTemporal Action Detection for each clip')
     # 按照选定的帧数进行预测
     prog_bar = mmcv.ProgressBar(len(timestamps))
@@ -259,10 +356,6 @@ def skeleton_based_spatiotemporal_reconition(args, label_map, human_detections, 
         if proposal.shape[0] == 0:  # no people detected
             skeleton_predictions.append(None)
             continue
-        
-        # 取出该帧的人体骨骼
-        print(timestamp)
-        pose_result = pose_results[timestamp]
 
         # 建立人体骨骼的时序长度
         # start_frame = timestamp - (clip_len // 2 - 1) * frame_interval
@@ -271,11 +364,12 @@ def skeleton_based_spatiotemporal_reconition(args, label_map, human_detections, 
         frame_inds =[i for i in list(frame_inds) if i>0 and i< num_frame]
         pose_num_frame = len(frame_inds)
 
+        # 取出该帧的人体骨骼
+        pose_result = [pose_results[ind] for ind in frame_inds]
+
         # 对该帧中所有的人体骨骼进行检测
         skeleton_prediction = []
         for i in range(proposal.shape[0]):
-            # 这一步是为了后期对齐数据
-            skeleton_prediction.append([])
 
             # 为每个骨骼建立数据
             fake_anno = dict(
@@ -321,14 +415,15 @@ def skeleton_based_spatiotemporal_reconition(args, label_map, human_detections, 
             # pipeline处理
             # return返回字典，前五个精度最高的标签和分数
             results = inference_recognizer(skeleton_stdet_model, fake_anno)
-            skeleton_prediction.append(results[0])
-            st_action_label = label_map[results[0][0]]
-            print(st_action_label)
+            # result = {label_map[results[0][0]], results[0][1]}
+            # st_action_label = label_map[results[0][0]]
+            # print(st_action_label)
+            pred = (area, label_map[results[0][0]], results[0][1])
+            skeleton_prediction.append(pred)
 
-    skeleton_predictions.append(skeleton_prediction)
-    prog_bar.update()
+        skeleton_predictions.append(skeleton_prediction)
+        prog_bar.update()
     return timestamps, skeleton_predictions
-
 
 
 def main():
@@ -405,19 +500,26 @@ def main():
     # 原子级动作检测
     # 这几个数据的个数都是一致的先尝试逐帧检测
     # print("\nlabel_map", np.array(label_map).shape, "det_results", np.array(det_results).shape, "pose_results", np.array(pose_results).shape, "num_frame", num_frame, sep="\t")
-    skeleton_based_spatiotemporal_reconition(args, label_map, det_results, pose_results, num_frame, h, w)
-    # 生成这个是为了更加方便画骨骼图
-    pose_model = init_pose_model(args.pose_config, args.pose_checkpoint,
-                                 args.device)
+    timestamps, stdet_preds = skeleton_based_spatiotemporal_reconition(args, model, label_map, det_results, pose_results, num_frame, h, w)
     
     # 逐一可视化每一帧中的骨架
-    vis_frames = [
-        vis_pose_result(pose_model, frame_paths[i], pose_results[i])
-        for i in range(num_frame)
-    ]
-    for frame in vis_frames:
-        cv2.putText(frame, action_label, (10, 30), FONTFACE, FONTSCALE,
-                    FONTCOLOR, THICKNESS, LINETYPE)
+    # 生成这个是为了更加方便画骨骼图
+    print("Performing visualization")
+    frames = [
+        cv2.imread(frame_paths[timestamp])
+        for timestamp in timestamps
+        ]
+    # pose_result也应该对齐
+    # 不过这里我们使用的是一帧一帧的处理，所以这里可以忽视
+
+    pose_model = init_pose_model(args.pose_config, args.pose_checkpoint,
+                                 args.device)
+    print("\ndet",det_results[0][0])
+    print("\npreds",stdet_preds[0])
+    print("\npose",pose_results[0])
+    print(action_label)
+    vis_frames = visualize(frames, stdet_preds, pose_results, 
+                           action_label, pose_model)
 
     # 写入视频
     vid = mpy.ImageSequenceClip([x[:, :, ::-1] for x in vis_frames], fps=24)

@@ -72,7 +72,7 @@ def visualize(frames,
         frames (list[np.ndarray]): Frames for visualization, note that
             len(frames) % len(annotations) should be 0.
         annotations (list[list[tuple]]): The predicted spatio-temporal
-            detection results.原子级预测
+            detection results.原子级预测tuple中为(bbox, )
         pose_results (list[list[tuple]): The pose results.
         action_result (str): The predicted action recognition results.时间级预测
         pose_model (nn.Module): The constructed pose model.
@@ -578,20 +578,22 @@ def skeleton_based_stdet(args, label_map, human_detections, pose_results,
             area = expand_bbox(person_bbox, h, w)
 
             # 对于baby_fall.mp4，len(pose_results)=162，len(det)也为162
-            # 而pose_result长度为30
+            # 而pose_result长度为30帧
 
             # j为某一帧，poses为该帧中的所有人体骨骼
             for j, poses in enumerate(pose_result):  # num_frame
+                # 将人体骨骼和预测框进行匹配
                 max_iou = float('-inf')
                 index = -1
                 if len(poses) == 0:
                     continue
                 for k, per_pose in enumerate(poses):
                     iou = cal_iou(per_pose['bbox'][:4], area)
-                    # 为了得到与人体检测框最匹配的人体骨架
                     if max_iou < iou:
                         index = k
                         max_iou = iou
+                # 为第0个人，第j张图片的骨骼，因为这里只有一个人，
+                # 所以上述的循环就相当于Tracker
                 keypoint[0, j] = poses[index]['keypoints'][:, :2]
                 keypoint_score[0, j] = poses[index]['keypoints'][:, 2]
 
