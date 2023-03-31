@@ -1,4 +1,5 @@
-# 修改代码以达到我们的目标
+# 修改代码以达到我们的目标，减少目标类
+# 修改可视化
 import argparse
 import copy as cp
 import os
@@ -57,7 +58,10 @@ PLATEBLUE = [hex2color(h) for h in PLATEBLUE]
 PLATEGREEN = '004b23-006400-007200-008000-38b000-70e000'
 PLATEGREEN = PLATEGREEN.split('-')
 PLATEGREEN = [hex2color(h) for h in PLATEGREEN]
-
+# 蓝色，黄色，紫色
+PLATE = '03045e-FFA500-FFC0CB'
+PLATE = PLATE.split('-')
+PLATE = [hex2color(h) for h in PLATE]
 
 def visualize(frames,
               annotations,
@@ -132,6 +136,11 @@ def visualize(frames,
                     if k >= max_num:
                         break
                     text = abbrev(lb)
+                    
+                    if text == "abnormal":
+                        plate_color = PLATE[1]
+                    elif text == "fall down":
+                        plate_color = PLATE[2]
                     text = ': '.join([text, str(score[k])])
                     location = (0 + st[0], 18 + k * 18 + st[1])
                     textsize = cv2.getTextSize(text, FONTFACE, FONTSCALE,
@@ -145,6 +154,24 @@ def visualize(frames,
 
     return frames_
 
+def filter_label_map(outputs, label_map):
+    """将81类标签聚合成我们的9类标签"""
+    file_path = "my_label.txt"
+    lines = open(file_path).readlines()
+    # 用来存储整合后的数据
+    res = np.zeros((len(lines)+1))
+    lines = [x.strip().split(": ") for x in lines]
+    label_map = {}
+    for i, label in enumerate(lines):
+        label_map[i] =  label[1]
+        inds = [int(j) for j in label[0].split("*")]
+        for j in inds:
+            res[i] += outputs[j]
+            outputs[j] = 0
+    i += 1
+    label_map[i] = 'others'
+    res[i] = sum(outputs)
+    return res, label_map
 
 def parse_args():
     parser = argparse.ArgumentParser(description='MMAction2 demo')
@@ -513,6 +540,7 @@ def skeleton_based_stdet(args, label_map, human_detections, pose_results,
     # 一些预处理操作
     skeleton_config = mmcv.Config.fromfile(args.skeleton_config)
     num_class = max(label_map.keys()) + 1  # for AVA dataset (81)
+    print("\nnum_class", num_class)
     skeleton_config.model.cls_head.num_classes = num_class
     skeleton_pipeline = Compose(skeleton_config.test_pipeline)
 
@@ -608,8 +636,14 @@ def skeleton_based_stdet(args, label_map, human_detections, pose_results,
                     return_loss=False, imgs=skeleton_imgs)
                 output = output[0]
                 # 这里要print一下
+                # print("\noutput_shape[0]", np.array(output).shape)
                 # print(output)
-                for k in range(len(output)):  # 81
+                # print("label_map", label_map)
+                output, label_map = filter_label_map(output, label_map)
+                # print("output",output)
+                # print("label_map", label_map)
+                # assert False
+                for k in range(len(output)):  # 81->10
                     # 循环判断标签值是否满足需求
                     if k not in label_map:
                         continue

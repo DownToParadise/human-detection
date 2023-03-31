@@ -13,7 +13,7 @@ import copy as cp
 from mmcv import DictAction
 
 from mmaction.apis import inference_recognizer, init_recognizer
-from demo_video_structuralize import skeleton_based_action_recognition, skeleton_based_stdet
+from demo.demo_video_structuralize_test import skeleton_based_action_recognition, skeleton_based_stdet
 
 from mmaction.datasets.pipelines import Compose
 from mmcv.runner import load_checkpoint
