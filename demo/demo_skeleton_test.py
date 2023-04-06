@@ -56,6 +56,10 @@ PLATEBLUE = [hex2color(h) for h in PLATEBLUE]
 PLATEGREEN = '004b23-006400-007200-008000-38b000-70e000'
 PLATEGREEN = PLATEGREEN.split('-')
 PLATEGREEN = [hex2color(h) for h in PLATEGREEN]
+# 蓝色，黄色，紫色
+PLATE = '03045e-FFA500-FFC0CB'
+PLATE = PLATE.split('-')
+PLATE = [hex2color(h) for h in PLATE]
 
 def parse_args():
     # 参数配置
@@ -194,23 +198,29 @@ def visualize(frames,
                 if not len(label):
                     continue
                 score = ann[2]
-
                 # 绘制检测框
                 box = box.astype(np.int64)
                 st, ed = tuple(box[:2]), tuple(box[2:])
                 if not pose_results:
                     cv2.rectangle(frame, st, ed, plate[0], 2)
-
+                text = label
+                if text == "abnormal":
+                    plate_color = PLATE[1]
+                elif text == "fall down":
+                    plate_color = PLATE[2]
+                else:
+                    plate_color = plate[1]
                 text = ': '.join([label, "%.2f%%"%(score*100)])
-                print(text)
+
                 location = (0 + st[0], 18 + 1 * 18 + st[1])
                 textsize = cv2.getTextSize(text, FONTFACE, FONTSCALE,
                                             THICKNESS)[0]
                 textwidth = textsize[0]
+                # 设置rectangle的宽度
                 plate_width = 16
                 diag0 = (location[0] + textwidth, location[1] - plate_width)
                 diag1 = (location[0], location[1] + 2)
-                cv2.rectangle(frame, diag0, diag1, plate[1], -1)
+                cv2.rectangle(frame, diag0, diag1, plate_color, -1)
                 cv2.putText(frame, text, location, FONTFACE, FONTSCALE,
                             FONTCOLOR, THICKNESS, LINETYPE)
 

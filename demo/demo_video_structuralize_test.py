@@ -55,11 +55,8 @@ def hex2color(h):
 PLATEBLUE = '03045e-023e8a-0077b6-0096c7-00b4d8-48cae4'
 PLATEBLUE = PLATEBLUE.split('-')
 PLATEBLUE = [hex2color(h) for h in PLATEBLUE]
-PLATEGREEN = '004b23-006400-007200-008000-38b000-70e000'
-PLATEGREEN = PLATEGREEN.split('-')
-PLATEGREEN = [hex2color(h) for h in PLATEGREEN]
-# 蓝色，黄色，紫色
-PLATE = '03045e-FFA500-FFC0CB'
+# 蓝色，黄色，红色
+PLATE = '03045e-FFA500-0033FF'
 PLATE = PLATE.split('-')
 PLATE = [hex2color(h) for h in PLATE]
 
@@ -141,14 +138,17 @@ def visualize(frames,
                         plate_color = PLATE[1]
                     elif text == "fall down":
                         plate_color = PLATE[2]
-                    text = ': '.join([text, str(score[k])])
+                    else:
+                        plate_color = plate[k + 1]
+    
+                    text = ': '.join([text, "%.2f%%"%(score[k]*100)])
                     location = (0 + st[0], 18 + k * 18 + st[1])
                     textsize = cv2.getTextSize(text, FONTFACE, FONTSCALE,
                                                THICKNESS)[0]
                     textwidth = textsize[0]
                     diag0 = (location[0] + textwidth, location[1] - 14)
                     diag1 = (location[0], location[1] + 2)
-                    cv2.rectangle(frame, diag0, diag1, plate[k + 1], -1)
+                    cv2.rectangle(frame, diag0, diag1, plate_color, -1)
                     cv2.putText(frame, text, location, FONTFACE, FONTSCALE,
                                 FONTCOLOR, THICKNESS, LINETYPE)
 
@@ -249,7 +249,7 @@ def parse_args():
     parser.add_argument(
         '--action-score-thr',
         type=float,
-        default=0.4,
+        default=0.2,
         help='the threshold of action prediction score')
     parser.add_argument(
         '--video',
@@ -559,6 +559,8 @@ def skeleton_based_stdet(args, label_map, human_detections, pose_results,
     # 按照选定的帧数进行预测
     prog_bar = mmcv.ProgressBar(len(timestamps))
     # 每隔八帧进行一次检测
+    count = 0
+    f = open("label.txt", "w+")
     for timestamp in timestamps:
         # 加载人体检测候选框
         proposal = human_detections[timestamp - 1]
@@ -635,6 +637,9 @@ def skeleton_based_stdet(args, label_map, human_detections, pose_results,
                 output = skeleton_stdet_model(
                     return_loss=False, imgs=skeleton_imgs)
                 output = output[0]
+                count+=1
+                text = str(count) + '\n' + str(output) + '\n'
+                f.write(text)
                 # 这里要print一下
                 # print("\noutput_shape[0]", np.array(output).shape)
                 # print(output)
@@ -795,7 +800,7 @@ def main():
     stdet_preds = None
     if args.use_skeleton_stdet:
         print('Use skeleton-based SpatioTemporal Action Detection')
-        clip_len, frame_interval = 30, 1
+        clip_len, frame_interval = 8, 1
         timestamps, stdet_preds = skeleton_based_stdet(args, stdet_label_map,
                                                        human_detections,
                                                        pose_results, num_frame,

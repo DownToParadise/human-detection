@@ -1,9 +1,8 @@
 3: crouch/kneel
 4*7: jump/leap
-5: fall down
-8: lie/sleep
+5*8*9: fall down
 10: run/jog
-11*41: sit
-12: stand
+11*41*63: sit
+12*17*80*15: stand
 14: walk
-9*34*45*46*76: abnormal
+34*45*46*76: abnormal
