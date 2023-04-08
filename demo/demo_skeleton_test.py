@@ -163,6 +163,7 @@ def visualize(frames,
     plate = [x[::-1] for x in plate]
 
     frames_ = cp.deepcopy(frames)
+    frames_1 = cp.deepcopy(frames)
     nf, na = len(frames), len(annotations)
     # 帧的数量必须是原子级动作识别数量的整数倍，这里为8倍
     assert nf % na == 0
@@ -176,6 +177,8 @@ def visualize(frames,
         for i in range(nf):
             frames_[i] = vis_pose_result(pose_model, frames_[i],
                                          pose_results[i])
+            
+            frames_1[i] = frames_[i]
 
     for i in range(na):
         anno = annotations[i]
