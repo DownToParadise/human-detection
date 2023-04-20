@@ -1,8 +1,8 @@
-4*7: jump/leap
-5*8*3: fall down
-10: run/jog
-6*11*41*63*28*51: sit
-12*17*80*15*30*22*73: stand
+5*3*64*76*52: fall down
 14: walk
-80: watch
+12*17*80*15*30*22*73*70: stand
+6*11*41*63*28*51: sit
+4*7: jump/leap
+10: run/jog
+8: lying
 34*45*46*76*9: abnormal

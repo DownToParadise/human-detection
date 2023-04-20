@@ -48,24 +48,23 @@ LINETYPE = 1
 
 
 def hex2color(h):
-    """Convert the 6-digit hex string to tuple of 3 int value (RGB)"""
-    return (int(h[:2], 16), int(h[2:4], 16), int(h[4:], 16))
+    """Convert the 6-digit hex string to tuple of 3 int value (RGB->BGR)"""
+    return (int(h[4:], 16), int(h[2:4], 16), int(h[:2], 16))
 
 
-PLATEBLUE = '03045e-023e8a-0077b6-0096c7-00b4d8-48cae4'
-PLATEBLUE = PLATEBLUE.split('-')
-PLATEBLUE = [hex2color(h) for h in PLATEBLUE]
 # 蓝色，黄色，红色
-PLATE = '03045e-FFA500-0033FF'
+PLATE = '023e8a-FFA500-FF0000'
 PLATE = PLATE.split('-')
 PLATE = [hex2color(h) for h in PLATE]
+lie_count = 0
+lie_flag = False
 
 def visualize(frames,
               annotations,
               pose_results,
               action_result,
               pose_model,
-              plate=PLATEBLUE,
+              plate=PLATE,
               max_num=5):
     """Visualize frames with predicted annotations.
 
@@ -84,9 +83,7 @@ def visualize(frames,
     Returns:
         list[np.ndarray]: Visualized frames.
     """
-    # 色盘的大小必须大于max_num，否者弹出异常
-    assert max_num + 1 <= len(plate)
-    plate = [x[::-1] for x in plate]
+    # 这里默认只显示一种跌倒标签，所以不用对比标签数量
 
     frames_ = cp.deepcopy(frames)
     nf, na = len(frames), len(annotations)
@@ -131,22 +128,53 @@ def visualize(frames,
 
                 for k, lb in enumerate(label):
                     if k >= max_num:
+                        # 设置maxnum为1只让他显示最大值
                         break
                     text = abbrev(lb)
                     
+                    # 确定当前的状态和画盘颜色
                     if text == "abnormal":
                         plate_color = PLATE[1]
+                        lie_count = 0
                     elif text == "fall down":
                         plate_color = PLATE[2]
+                        lie_count = 0
+                    elif text == "lying":
+                        # 我还在考虑要不要lying标签
+                        # 如果视频中有多个目标则直接将lying视为Falldown
+                        # text = "fall down"
+                        # plate_color = PLATE[2]
+                        # 视频中只有一个目标
+                        if lie_count < 33:
+                            # 还是摔倒阶段
+                            # lie_flag = False
+                            text = "fall down"
+                            if score[k] >= 0.91:
+                                score[k] -= 0.07
+                            print(text)
+                            plate_color = PLATE[2]
+                        elif lie_count >= 33:
+                            # 连续多次识别到lying
+                            # 切换到躺下状态，并停止计数
+                            if lie_count < 55:
+                                # score[k] -= (0.1-((lie_count-33)//5)/5*0.1)
+                                score[k] -= 0.07
+                            elif lie_count >55 and lie_count < 80:
+                                score[k] -= 0.04
+                            text = 'lying'
+                            print(text)
+                            plate_color = PLATE[1]
+                        lie_count += 1
                     else:
-                        plate_color = plate[k + 1]
-    
+                        plate_color = plate[0]
+                        lie_count = 0
+
                     text = ': '.join([text, "%.2f%%"%(score[k]*100)])
                     location = (0 + st[0], 18 + k * 18 + st[1])
                     textsize = cv2.getTextSize(text, FONTFACE, FONTSCALE,
                                                THICKNESS)[0]
                     textwidth = textsize[0]
-                    diag0 = (location[0] + textwidth, location[1] - 14)
+                    diag0 = (location[0] + textwidth, location[1] - 16)
                     diag1 = (location[0], location[1] + 2)
                     cv2.rectangle(frame, diag0, diag1, plate_color, -1)
                     cv2.putText(frame, text, location, FONTFACE, FONTSCALE,
@@ -168,8 +196,11 @@ def filter_label_map(outputs, label_map):
         for j in inds:
             res[i] += outputs[j]
             outputs[j] = 0
-    i += 1
-    label_map[i] = 'others'
+    # 将watch这个动作强制至0
+    outputs[80] = 0
+    # 剩余的动作全部加到abnoraml中去
+    # i += 1
+    # label_map[i] = 'others'
     res[i] = sum(outputs)
     return res, label_map
 
@@ -249,7 +280,7 @@ def parse_args():
     parser.add_argument(
         '--action-score-thr',
         type=float,
-        default=0.2,
+        default=0.5,
         help='the threshold of action prediction score')
     parser.add_argument(
         '--video',
@@ -863,7 +894,7 @@ def main():
         ]
 
     vis_frames = visualize(frames, stdet_results, pose_results, action_result,
-                           pose_model)
+                           pose_model, max_num=1)
     vid = mpy.ImageSequenceClip([x[:, :, ::-1] for x in vis_frames],
                                 fps=args.output_fps)
     vid.write_videofile(args.out_filename)
